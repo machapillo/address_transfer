@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>住所から緯度経度取得アプリ</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        .card {
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            border: 1px solid rgba(0, 0, 0, 0.125);
+        }
+        .table-responsive {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .status-success {
+            color: #198754;
+            font-weight: bold;
+        }
+        .status-error {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .loading {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="text-center mb-4">住所から緯度経度取得アプリ</h1>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">住所入力</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="geocodeForm">
+                            <div class="mb-3">
+                                <label for="address" class="form-label">住所を入力してください</label>
+                                <input type="text" class="form-control" id="address" 
+                                       placeholder="例: 東京都渋谷区渋谷1-1-1" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">
+                                <span class="loading spinner-border spinner-border-sm me-2" role="status"></span>
+                                緯度経度を取得
+                            </button>
+                        </form>
+                        
+                        <div id="result" class="mt-3" style="display: none;">
+                            <div class="alert alert-info">
+                                <h6>取得結果:</h6>
+                                <div id="resultContent"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6 mb-4">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">実行履歴</h5>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="loadHistory()">
+                            更新
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="clearHistory()">
+                            履歴削除
+                        </button>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover mb-0">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>実行日時</th>
+                                        <th>住所</th>
+                                        <th>緯度</th>
+                                        <th>経度</th>
+                                        <th>ステータス</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="historyTableBody">
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted">履歴がありません</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // ローカルストレージから履歴を取得
+        function getStoredHistory() {
+            const history = localStorage.getItem('geocodingHistory');
+            return history ? JSON.parse(history) : [];
+        }
+        
+        // ローカルストレージに履歴を保存
+        function saveToHistory(item) {
+            const history = getStoredHistory();
+            history.unshift(item); // 新しいものを先頭に追加
+            
+            // 最大100件まで保存
+            if (history.length > 100) {
+                history.splice(100);
+            }
+            
+            localStorage.setItem('geocodingHistory', JSON.stringify(history));
+        }
+        
+        // 履歴をクリア
+        function clearHistory() {
+            if (confirm('履歴をすべて削除しますか？')) {
+                localStorage.removeItem('geocodingHistory');
+                loadHistory();
+            }
+        }
+        
+        // フォーム送信処理
+        document.getElementById('geocodeForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const address = document.getElementById('address').value.trim();
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const loading = submitBtn.querySelector('.loading');
+            const resultDiv = document.getElementById('result');
+            const resultContent = document.getElementById('resultContent');
+            
+            if (!address) {
+                alert('住所を入力してください');
+                return;
+            }
+            
+            // ローディング状態
+            submitBtn.disabled = true;
+            loading.style.display = 'inline-block';
+            resultDiv.style.display = 'none';
+            
+            try {
+                // GitHub Pages対応: クライアントから直接Nominatim APIを呼び出す
+                const url = new URL('https://nominatim.openstreetmap.org/search');
+                url.search = new URLSearchParams({
+                    q: address,
+                    format: 'json',
+                    limit: 1,
+                    addressdetails: 1
+                }).toString();
+
+                const response = await fetch(url.toString(), {
+                    headers: { 'Accept': 'application/json' }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Nominatim API error: ${response.status} ${response.statusText}`);
+                }
+
+                const results = await response.json();
+                let lat = null;
+                let lon = null;
+                let statusText = '住所が見つかりません';
+
+                if (Array.isArray(results) && results.length > 0) {
+                    lat = parseFloat(results[0].lat);
+                    lon = parseFloat(results[0].lon);
+                    statusText = '成功';
+                }
+
+                const data = {
+                    address: address,
+                    latitude: lat,
+                    longitude: lon,
+                    status: statusText,
+                    timestamp: new Date().toLocaleString()
+                };
+
+                // 表示更新（成功/未検出の両方をここで処理）
+                resultContent.innerHTML = `
+                    <strong>住所:</strong> ${data.address}<br>
+                    <strong>緯度:</strong> ${data.latitude ?? 'N/A'}<br>
+                    <strong>経度:</strong> ${data.longitude ?? 'N/A'}<br>
+                    <strong>ステータス:</strong> <span class="${data.status === '成功' ? 'status-success' : 'status-error'}">${data.status}</span><br>
+                    <strong>実行日時:</strong> ${data.timestamp}
+                `;
+                resultDiv.className = 'mt-3 alert ' + (data.status === '成功' ? 'alert-success' : 'alert-warning');
+                resultDiv.style.display = 'block';
+
+                // 履歴に保存し、テーブル更新
+                saveToHistory(data);
+                loadHistory();
+                
+            } catch (error) {
+                resultContent.innerHTML = `<strong>エラー:</strong> ${error.message}`;
+                resultDiv.className = 'mt-3 alert alert-danger';
+                resultDiv.style.display = 'block';
+            } finally {
+                // ローディング状態解除
+                submitBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        });
+        
+        // 履歴読み込み
+        function loadHistory() {
+            const history = getStoredHistory();
+            const tbody = document.getElementById('historyTableBody');
+            
+            if (history.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">履歴がありません</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = history.map(item => `
+                <tr>
+                    <td>${item.timestamp}</td>
+                    <td>${item.address}</td>
+                    <td>${item.latitude || 'N/A'}</td>
+                    <td>${item.longitude || 'N/A'}</td>
+                    <td><span class="${item.status === '成功' ? 'status-success' : 'status-error'}">${item.status}</span></td>
+                </tr>
+            `).join('');
+        }
+        
+        // ページ読み込み時に履歴を取得
+        document.addEventListener('DOMContentLoaded', loadHistory);
+    </script>
+</body>
+</html>
